@@ -1,0 +1,423 @@
+
+// use prisma-8
+
+enum Role {
+  ADMIN
+  STAFF
+}
+
+enum AccountStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+model User {
+  id             Uuid          @id @default(uuid())
+  username       String        @unique
+  email          String        @unique
+  password       String
+  name           String
+  phone          String?
+  hiredDate      TimestamptzJsDate?
+  role           Role          @default(STAFF)
+  status         AccountStatus @default(ACTIVE)
+  restockPinHash String?
+
+  orders         Order[]
+  attendance     Attendance[]
+  expenses       Expense[]
+  shiftHandovers ShiftHandover[]
+  withdrawals    Withdrawal[]
+  auditLogs      AuditLog[]
+  tokens         Token[]
+
+  createdAt TimestamptzJsDate @default(now())
+  updatedAt temporal.updatedAtJsDate()
+}
+
+enum TokenType {
+  REFRESH
+  VERIFY_EMAIL
+  RESET_PASSWORD
+  RESTOCK_AUTHORIZATION
+}
+
+model Token {
+  id        Uuid      @id @default(uuid())
+  userId    Uuid
+  token     String    @unique
+  type      TokenType
+  expiresAt TimestamptzJsDate
+  consumedAt TimestamptzJsDate?
+  revokedAt TimestamptzJsDate?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt TimestamptzJsDate @default(now())
+
+  @@index([userId])
+  @@index([type, expiresAt])
+}
+
+model Customer {
+  id           Uuid   @id @default(uuid())
+  customerName String
+  phoneNumber  String @unique
+
+  orders Order[]
+
+  createdAt TimestamptzJsDate @default(now())
+  updatedAt temporal.updatedAtJsDate()
+}
+
+enum OrderStatus {
+  PENDING
+  IN_PROGRESS
+  READY
+  CLAIMED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  UNPAID
+  PAID
+}
+
+enum PaymentMethod {
+  CASH
+  GCASH
+}
+
+model Order {
+  id              Uuid          @id @default(uuid())
+  customerId      Uuid
+  userId          Uuid
+  status          OrderStatus   @default(PENDING)
+  paymentStatus   PaymentStatus @default(UNPAID)
+  paymentMethod   PaymentMethod?
+  amountPaid      Decimal       @default(0)
+  totalAmount     Decimal
+  paymentDate     TimestamptzJsDate?
+  claimedDate     TimestamptzJsDate?
+  isSelfService   Boolean       @default(false)
+  idempotencyKey  String?       @unique
+  shiftHandoverId Uuid?
+
+  customer      Customer       @relation(fields: [customerId], references: [id])
+  user          User           @relation(fields: [userId], references: [id])
+  shiftHandover ShiftHandover? @relation(fields: [shiftHandoverId], references: [id])
+
+  orderDetails OrderDetail[]
+  consumptions InventoryConsumption[]
+
+  createdAt TimestamptzJsDate @default(now())
+  updatedAt temporal.updatedAtJsDate()
+
+  @@index([shiftHandoverId])
+  @@index([userId])
+  @@index([customerId])
+  @@index([status])
+  @@index([paymentStatus, paymentDate])
+  @@index([status, claimedDate])
+}
+
+enum ServiceType {
+  WASH_AND_DRY
+  WASH_ONLY
+  DRY_ONLY
+}
+
+model OrderDetail {
+  id          Uuid         @id @default(uuid())
+  orderId     Uuid
+  serviceId   Uuid?
+  serviceType ServiceType?
+  packageId   Uuid?
+  inventoryId Uuid?
+  weight      Decimal?
+  quantity    Int          @default(1)
+  subtotal    Decimal
+
+  order     Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  service   LaundryService? @relation(fields: [serviceId], references: [id])
+  package   Package?        @relation(fields: [packageId], references: [id])
+  inventory Inventory?      @relation(fields: [inventoryId], references: [id])
+
+  @@index([orderId])
+  @@index([packageId])
+  @@index([serviceId])
+  @@index([inventoryId])
+}
+
+enum ItemType {
+  CLOTHES
+  HOUSEHOLD_ITEMS
+  DRY_CLEAN_7_DAYS
+  CARPET
+  RUGS_AND_FLEECE_BLANKET
+  SELF_SERVICE
+}
+
+model LaundryService {
+  id          Uuid     @id @default(uuid())
+  serviceName String
+  itemType    ItemType
+  price       Decimal
+  status      Boolean  @default(true)
+
+  orderDetails OrderDetail[]
+
+  createdAt TimestamptzJsDate @default(now())
+  updatedAt temporal.updatedAtJsDate()
+
+  @@index([status])
+  @@index([itemType])
+}
+
+model Package {
+  id          Uuid    @id @default(uuid())
+  packageName String
+  price       Decimal
+  color       String?
+  status      Boolean @default(true)
+
+  details     PackageDetail[]
+  orderDetails OrderDetail[]
+
+  createdAt TimestamptzJsDate @default(now())
+  updatedAt temporal.updatedAtJsDate()
+
+  @@index([status])
+}
+
+model PackageDetail {
+  id          Uuid    @id @default(uuid())
+  packageId   Uuid
+  inventoryId Uuid
+  quantity    Decimal
+
+  package   Package   @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  inventory Inventory @relation(fields: [inventoryId], references: [id])
+
+  @@unique([packageId, inventoryId])
+  @@index([inventoryId])
+}
+
+enum StockStatus {
+  IN_STOCK
+  LOW_STOCK
+  OUT_OF_STOCK
+}
+
+model Inventory {
+  id                Uuid        @id @default(uuid())
+  itemName          String
+  quantity          Decimal     @default(0)
+  unit              String
+  unitPrice         Decimal
+  lowStockThreshold Decimal     @default(0)
+  stockStatus       StockStatus @default(IN_STOCK)
+  isActive          Boolean     @default(true)
+
+  orderDetails      OrderDetail[]
+  packageDetails    PackageDetail[]
+  consumptions      InventoryConsumption[]
+  handoverSnapshots ShiftHandoverInventory[]
+
+  createdAt TimestamptzJsDate @default(now())
+  updatedAt temporal.updatedAtJsDate()
+
+  @@index([isActive])
+  @@index([stockStatus])
+}
+
+model InventoryConsumption {
+  id           Uuid               @id @default(uuid())
+  orderId      Uuid
+  inventoryId  Uuid
+  quantityUsed Decimal
+  createdAt    TimestamptzJsDate @default(now())
+
+  order     Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  inventory Inventory @relation(fields: [inventoryId], references: [id])
+
+  @@index([orderId])
+  @@index([inventoryId])
+}
+
+enum AttendanceStatus {
+  PRESENT
+  LATE
+  ABSENT
+}
+
+model Attendance {
+  id         Uuid             @id @default(uuid())
+  userId     Uuid
+  date       DateString
+  timeIn     TimestamptzJsDate?
+  timeOut    TimestamptzJsDate?
+  totalHours Decimal?
+  autoClosed Boolean          @default(false)
+  status     AttendanceStatus @default(PRESENT)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt TimestamptzJsDate @default(now())
+  updatedAt temporal.updatedAtJsDate()
+
+  @@unique([userId, date])
+  @@index([date])
+  @@index([status])
+}
+
+enum ExpenseCategory {
+  SUPPLIES_AND_MATERIALS
+  UTILITIES
+  EQUIPMENT_REPAIR
+  RENT
+  OTHER
+}
+
+model Expense {
+  id              Uuid           @id @default(uuid())
+  userId          Uuid
+  amount          Decimal
+  category        ExpenseCategory
+  description     String
+  receiptUrl      String?
+  expenseDate     TimestamptzJsDate @default(now())
+  shiftHandoverId Uuid?
+
+  user          User           @relation(fields: [userId], references: [id])
+  shiftHandover ShiftHandover? @relation(fields: [shiftHandoverId], references: [id])
+
+  createdAt TimestamptzJsDate @default(now())
+  updatedAt temporal.updatedAtJsDate()
+
+  @@index([shiftHandoverId])
+  @@index([userId])
+  @@index([expenseDate])
+}
+
+enum CashStatus {
+  BALANCED
+  SHORTAGE
+  EXCESS
+}
+
+model ShiftHandover {
+  id                 Uuid        @id @default(uuid())
+  userId             Uuid
+  startTime          TimestamptzJsDate
+  endTime            TimestamptzJsDate?
+  laundryEarnings    Decimal     @default(0)
+  supplySales        Decimal     @default(0)
+  customServiceSales Decimal     @default(0)
+  digitalSales       Decimal     @default(0)
+  expense            Decimal     @default(0)
+  withdrawal         Decimal     @default(0)
+  expectedBalance    Decimal     @default(0)
+  actualCashCount    Decimal?
+  cashStatus         CashStatus?
+  notes              String?
+
+  user User @relation(fields: [userId], references: [id])
+
+  claimedOrders       Order[]
+  claimedExpenses     Expense[]
+  claimedWithdrawals  Withdrawal[] @relation("ClaimedWithdrawals")
+  earningsWithdrawals Withdrawal[] @relation("EarningsWithdrawals")
+  inventorySnapshot   ShiftHandoverInventory[]
+
+  createdAt TimestamptzJsDate @default(now())
+  updatedAt temporal.updatedAtJsDate()
+
+  @@index([userId])
+  @@index([endTime])
+}
+
+model ShiftHandoverInventory {
+  id              Uuid   @id @default(uuid())
+  shiftHandoverId Uuid
+  inventoryId     Uuid
+  itemName        String
+  unit            String
+  beginningQty    Decimal
+  endingQty       Decimal
+  createdAt       TimestamptzJsDate @default(now())
+
+  shiftHandover ShiftHandover @relation(fields: [shiftHandoverId], references: [id], onDelete: Cascade)
+  inventory     Inventory     @relation(fields: [inventoryId], references: [id])
+
+  @@unique([shiftHandoverId, inventoryId])
+  @@index([shiftHandoverId])
+  @@index([inventoryId])
+}
+
+enum WithdrawalSource {
+  CASH
+  GCASH
+}
+
+model Withdrawal {
+  id                     Uuid             @id @default(uuid())
+  userId                 Uuid
+  amount                 Decimal
+  reason                 String
+  remainingCash          Decimal
+  withdrawalDate         TimestamptzJsDate @default(now())
+  shiftHandoverId        Uuid?
+  source                 WithdrawalSource @default(CASH)
+  earningsFromHandoverId Uuid?
+
+  user User @relation(fields: [userId], references: [id])
+
+  shiftHandover       ShiftHandover? @relation("ClaimedWithdrawals", fields: [shiftHandoverId], references: [id])
+  earningsFromHandover ShiftHandover? @relation("EarningsWithdrawals", fields: [earningsFromHandoverId], references: [id])
+
+  createdAt TimestamptzJsDate @default(now())
+
+  @@index([userId])
+  @@index([shiftHandoverId])
+  @@index([earningsFromHandoverId])
+  @@index([withdrawalDate])
+}
+
+model DrawerState {
+  id                  Int     @id
+  defaultStartingCash Decimal @default(5000)
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  ARCHIVE
+  RESTOCK
+  WITHDRAWAL
+  PAYMENT
+  CLAIM
+  LOGIN
+  LOGOUT
+  RESET_PASSWORD
+}
+
+model AuditLog {
+  id          Uuid       @id @default(uuid())
+  userId      Uuid
+  action      AuditAction
+  module      String
+  description String?
+  oldValue    Json?
+  newValue    Json?
+  createdAt   TimestamptzJsDate @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([action, createdAt])
+  @@index([module, createdAt])
+}
